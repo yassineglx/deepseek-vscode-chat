@@ -16,28 +16,30 @@ export function activate(context: vscode.ExtensionContext) {
     panel.webview.html = getWebviewContent();
 
     panel.webview.onDidReceiveMessage(async (message: any) => {
-      switch (message.command) {
-        case "chat":
-          const userPrompt = message.message;
-          try {
-            const response = await ollama.chat({
-              model: "deepseek-r1:1.5b",
-              messages: [{ role: "user", content: userPrompt }],
-              stream: true,
-            });
+      if (message.command === "chat") {
+        const userPrompt = message.message;
+        try {
+          const response = await ollama.chat({
+            model: "deepseek-r1:1.5b",
+            messages: [{ role: "user", content: userPrompt }],
+            stream: true,
+          });
 
-            for await (const part of response) {
-              panel.webview.postMessage({
-                command: "chatResponse",
-                text: part.message.content,
-              });
-            }
-          } catch (error) {
+          let responseText = "";
+          for await (const part of response) {
+            responseText += part.message.content;
+            // Send the accumulated text to the webview
             panel.webview.postMessage({
               command: "chatResponse",
-              text: "❌ Error: Unable to process request.",
+              text: responseText,
             });
           }
+        } catch (error) {
+          panel.webview.postMessage({
+            command: "chatResponse",
+            text: "❌ Error: Unable to process request.",
+          });
+        }
       }
     });
 
@@ -96,14 +98,25 @@ export function activate(context: vscode.ExtensionContext) {
           <script>
               const vscode = acquireVsCodeApi();
               const chat = document.getElementById("chat");
-              const input = document.getElementById("input"); 
+              const input = document.getElementById("input");
               const send = document.getElementById("send");
+              let currentResponseElement = null;
 
               send.onclick = () => {
                   const message = input.value.trim();
                   if (message) {
-                      chat.innerHTML += '<p><strong>You:</strong> ' + message + '</p>';
+                      // Append user's message
+                      const userMessageEl = document.createElement("p");
+                      userMessageEl.innerHTML = "<strong>You:</strong> " + message;
+                      chat.appendChild(userMessageEl);
                       chat.scrollTop = chat.scrollHeight;
+                      
+                      // Create a placeholder for DeepAI response and store its reference
+                      currentResponseElement = document.createElement("p");
+                      currentResponseElement.innerHTML = "<strong>DeepAI:</strong> ";
+                      chat.appendChild(currentResponseElement);
+                      chat.scrollTop = chat.scrollHeight;
+                      
                       vscode.postMessage({ command: "chat", message });
                       input.value = "";
                   }
@@ -112,13 +125,20 @@ export function activate(context: vscode.ExtensionContext) {
               window.addEventListener("message", (event) => {
                   const { command, text } = event.data;
                   if (command === "chatResponse") {
-                      const newMessage = document.createElement("p");
-                      newMessage.innerHTML = "<strong>DeepAI:</strong> " + text;
-                      chat.appendChild(newMessage);
+                      // Update the existing placeholder instead of creating a new one
+                      if (currentResponseElement) {
+                        currentResponseElement.innerHTML = "<strong>DeepAI:</strong> " + text;
+                      } else {
+                        // Fallback: append a new message if placeholder is missing
+                        const newMessage = document.createElement("p");
+                        newMessage.innerHTML = "<strong>DeepAI:</strong> " + text;
+                        chat.appendChild(newMessage);
+                      }
                       chat.scrollTop = chat.scrollHeight;
                   }
               });
 
+              // Allow sending message on Enter key
               input.addEventListener("keypress", (event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
